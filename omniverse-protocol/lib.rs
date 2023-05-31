@@ -13,6 +13,19 @@ mod omniverse_protocol {
     use super::*;
     use ink::prelude::collections::BTreeMap;
     pub const DEFAULT_CD: u32 = 10;
+
+    #[ink(event)]
+    pub struct TransactionSent {
+        pk: [u8; 64],
+        nonce: u128,
+    }
+
+    #[ink(event)]
+    pub struct TransactionDuplicated {
+        pk: [u8; 64],
+        nonce: u128,
+    }
+
     /// Defines the storage of your contract.
     /// Add new fields to the below struct in order
     /// to add new static storage fields to your contract.
@@ -37,15 +50,47 @@ mod omniverse_protocol {
         #[ink(message)]
         fn send_omniverse_transaction(&mut self, data: OmniverseTransactionData) -> Result<(), Error> {
             // Check if the sender is malicious
-            if self.transaction_recorder.contains_key(&data.from) {
-                return Err(Error::Malicious);
+            let rc_ret = self.transaction_recorder.get(&data.from);
+            if let Some(rc) = rc_ret {
+                if rc.evil_tx_list.len() > 0 {
+                    return Err(Error::UserMalicious);
+                }
             }
 
             // Verify the signature
             let ret = self.verify_transaction(&data);
 
-            if ret.is_ok() {
+            match ret {
+                Ok(()) => {
+                    // Check cache
+                    let cache_ret = self.transaction_cache.get(&data.from);
+                    if let Some(c) = cache_ret {
+                        if c.timestamp != 0 {
+                            return Err(Error::TransactionCached);
+                        }
+                    }
 
+                    let cache = OmniverseTx::new(data.clone(), self.env().block_timestamp());
+                    // Logic verification
+                    self.check_execution(&data);
+                    self.transaction_cache.insert(data.from.clone(), cache);
+                    Self::env().emit_event(TransactionSent {
+                        pk: data.from,
+                        nonce: data.nonce,
+                    });
+                }
+                Err(Error::Duplicated) => {
+                    Self::env().emit_event(TransactionDuplicated {
+                        pk: data.from,
+                        nonce: data.nonce,
+                    });
+                }
+                Err(Error::Malicious) => {
+                    // Slash
+                }
+                _ => {
+
+                }
             }
 
             ret
@@ -87,6 +132,10 @@ mod omniverse_protocol {
                 transaction_recorder: BTreeMap::new(),
                 transaction_cache: BTreeMap::new(),
             }
+        }
+
+        fn check_execution(&self, data: &OmniverseTransactionData) -> Result<(), Error> {
+            Ok(())
         }
 
         /// Verify an omniverse transaction
@@ -203,12 +252,7 @@ mod omniverse_protocol {
         }
 
         #[ink::test]
-        fn verify_transaction_works() {
-            let msg = "hello nika";
-            let mut msg_hash = <ink::env::hash::Sha2x256 as ink::env::hash::HashOutput>::Type::default();
-            ink::env::hash_bytes::<ink::env::hash::Sha2x256>(&msg.as_bytes(), &mut msg_hash);
-            assert_eq!(msg_hash, message_hash);
-
+        fn send_omniverse_transaction_works() {
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
@@ -219,7 +263,7 @@ mod omniverse_protocol {
             };
 
             let mut omniverse_protocol = OmniverseProtocol::new(0);
-            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data), Err(Error::WrongSignature));
+            assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::WrongSignature));
 
             let secp = Secp256k1::new();
             let (secret_key, public_key) = secp.generate_keypair(&mut OsRng);
@@ -230,21 +274,13 @@ mod omniverse_protocol {
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
             transaction_data.signature = sig_recovery;
-            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data), Ok(()));
+            assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Ok(()));
             let mut rc = RecordedCertificate::default();
             rc.tx_list.push(OmniverseTx::new(transaction_data.clone(), 0));
             omniverse_protocol.transaction_recorder.insert(transaction_data.from, rc);
             let count = omniverse_protocol.get_transaction_count(transaction_data.from);
             assert_eq!(count, 1);
-            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data), Err(Error::Duplicated));
-            
-            transaction_data.chain_id = 10;
-            let message = Message::from_slice(transaction_data.get_hash().as_slice())
-		    .expect("messages must be 32 bytes and are expected to be hashes");
-            let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
-	        let sig_recovery = get_sig_slice(&sig);
-            transaction_data.signature = sig_recovery;
-            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data), Err(Error::Malicious));
+            assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::Duplicated));
 
             transaction_data.nonce = 10;
             let message = Message::from_slice(transaction_data.get_hash().as_slice())
@@ -252,7 +288,18 @@ mod omniverse_protocol {
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
             transaction_data.signature = sig_recovery;
-            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data), Err(Error::NonceError));
+            assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::NonceError));
+            
+            transaction_data.chain_id = 10;
+            transaction_data.nonce = 0;
+            let message = Message::from_slice(transaction_data.get_hash().as_slice())
+		    .expect("messages must be 32 bytes and are expected to be hashes");
+            let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
+	        let sig_recovery = get_sig_slice(&sig);
+            transaction_data.signature = sig_recovery;
+            assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::Malicious));
+
+            assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::UserMalicious));
         }
     }
 

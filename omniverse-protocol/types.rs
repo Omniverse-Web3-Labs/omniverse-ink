@@ -80,8 +80,10 @@ impl RecordedCertificate {
 #[derive(Debug, PartialEq, Eq, Encode, Decode, Clone, scale_info::TypeInfo)]
 pub enum Error {
     Malicious,
+    UserMalicious,
     Duplicated,
     WrongSignature,
     NonceError,
     SerializePublicKeyFailed,
+    TransactionCached,
 }
