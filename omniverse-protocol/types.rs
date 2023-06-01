@@ -89,4 +89,7 @@ pub enum Error {
     TransactionNotCached,
     NonceNotMatch,
     CoolingDown,
+    NotOwner,
+    NotAppContract,
+    AppContractNotSet,
 }

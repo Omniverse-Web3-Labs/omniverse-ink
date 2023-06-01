@@ -35,6 +35,9 @@ mod omniverse_protocol {
         /// Account id of owner
         owner: Option<AccountId>,
 
+        /// Account id of app contract
+        app_contract: Option<AccountId>,
+
         /// Chain id
         chain_id: u32,
         /// Cooling down time
@@ -49,6 +52,7 @@ mod omniverse_protocol {
         /// Sends an omniverse transaction
         #[ink(message)]
         fn send_omniverse_transaction(&mut self, data: OmniverseTransactionData) -> Result<(), Error> {
+            self.only_app_contract()?;
             // Check if the sender is malicious
             let rc_ret = self.transaction_recorder.get(&data.from);
             if let Some(rc) = rc_ret {
@@ -130,6 +134,7 @@ mod omniverse_protocol {
         /// Trigger execution
         #[ink(message)]
         fn trigger_execution(&mut self, pk: [u8; 64], nonce: u128) -> Result<(), Error> {
+            self.only_app_contract()?;
             let cache = self.transaction_cache.get(&pk).ok_or(Error::TransactionNotCached)?;
             if cache.tx_data.nonce != nonce {
                 return Err(Error::NonceNotMatch);
@@ -153,11 +158,46 @@ mod omniverse_protocol {
             let caller = Self::env().caller();
             Self {
                 owner: Some(caller),
+                app_contract: None,
                 chain_id,
                 cd_time: DEFAULT_CD,
                 transaction_recorder: BTreeMap::new(),
                 transaction_cache: BTreeMap::new(),
             }
+        }
+
+        #[ink(message)]
+        pub fn set_app_contract(&mut self, account: AccountId) -> Result<(), Error> {
+            self.only_owner()?;
+
+            self.app_contract = Some(account);
+
+            Ok(())
+        }
+
+        /// If the caller is the owner of the contract
+        fn only_owner(&self) -> Result<(), Error> {
+            let caller = self.env().caller();
+            if self.owner.unwrap() != caller {
+                return Err(Error::NotOwner);
+            }
+
+            Ok(())
+        }
+
+        /// If the caller is the app contract
+        fn only_app_contract(&self) -> Result<(), Error> {
+            let caller = self.env().caller();
+            if let Some(account) = self.app_contract {
+                if account != caller {
+                    return Err(Error::NotAppContract);
+                }
+            }
+            else {
+                return Err(Error::AppContractNotSet);                
+            }
+
+            Ok(())
         }
 
         fn check_execution(&self, data: &OmniverseTransactionData) -> Result<(), Error> {
@@ -225,6 +265,10 @@ mod omniverse_protocol {
     mod tests {
         /// Imports all the definitions from the outer scope so we can use them here.
         use super::*;
+        use ink::env::{
+            test::{self, default_accounts},
+            DefaultEnvironment,
+        };
         use secp256k1::rand::rngs::OsRng;
         use secp256k1::{ecdsa::RecoverableSignature, Message, PublicKey, Secp256k1, SecretKey};
 
@@ -278,9 +322,26 @@ mod omniverse_protocol {
         }
 
         #[ink::test]
-        fn trigger_execution_works() {
+        fn set_app_contract_works() {
+            let accounts = default_accounts::<DefaultEnvironment>();
             let mut omniverse_protocol = OmniverseProtocol::new(0);
+            
+            // Succeed
+            assert_eq!(omniverse_protocol.set_app_contract(accounts.alice), Ok(()));
+
+            // Caller not owner
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            assert_eq!(omniverse_protocol.set_app_contract(accounts.alice), Err(Error::NotOwner));
+        }
+
+        #[ink::test]
+        fn trigger_execution_works() {
+            let accounts = default_accounts::<DefaultEnvironment>();
+            let mut omniverse_protocol = OmniverseProtocol::new(0);
+            // App contract not set
+            assert_eq!(omniverse_protocol.trigger_execution([0_u8; 64], 0), Err(Error::AppContractNotSet));
             // Transaction not cached
+            omniverse_protocol.set_app_contract(accounts.alice);
             assert_eq!(omniverse_protocol.trigger_execution([0_u8; 64], 0), Err(Error::TransactionNotCached));
             // Nonce not match
             let mut transaction_data = OmniverseTransactionData {
@@ -301,6 +362,7 @@ mod omniverse_protocol {
 
         #[ink::test]
         fn send_omniverse_transaction_works() {
+            let accounts = default_accounts::<DefaultEnvironment>();
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
@@ -311,6 +373,8 @@ mod omniverse_protocol {
             };
 
             let mut omniverse_protocol = OmniverseProtocol::new(0);
+            assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::AppContractNotSet));
+            omniverse_protocol.set_app_contract(accounts.alice);
             assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::WrongSignature));
 
             let secp = Secp256k1::new();
