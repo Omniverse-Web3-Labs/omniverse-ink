@@ -86,4 +86,7 @@ pub enum Error {
     NonceError,
     SerializePublicKeyFailed,
     TransactionCached,
+    TransactionNotCached,
+    NonceNotMatch,
+    CoolingDown,
 }

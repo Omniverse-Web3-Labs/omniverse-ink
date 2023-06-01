@@ -12,7 +12,7 @@ pub use functions::*;
 mod omniverse_protocol {
     use super::*;
     use ink::prelude::collections::BTreeMap;
-    pub const DEFAULT_CD: u32 = 10;
+    pub const DEFAULT_CD: u64 = 10;
 
     #[ink(event)]
     pub struct TransactionSent {
@@ -38,7 +38,7 @@ mod omniverse_protocol {
         /// Chain id
         chain_id: u32,
         /// Cooling down time
-        cd_time: u32,
+        cd_time: u64,
         /// Omniverse account records
         transaction_recorder: BTreeMap<[u8; 64], RecordedCertificate>,
         /// Transactions to be executed
@@ -64,10 +64,8 @@ mod omniverse_protocol {
                 Ok(()) => {
                     // Check cache
                     let cache_ret = self.transaction_cache.get(&data.from);
-                    if let Some(c) = cache_ret {
-                        if c.timestamp != 0 {
-                            return Err(Error::TransactionCached);
-                        }
+                    if cache_ret.is_some() {
+                        return Err(Error::TransactionCached);
                     }
 
                     let cache = OmniverseTx::new(data.clone(), self.env().block_timestamp());
@@ -117,6 +115,34 @@ mod omniverse_protocol {
         #[ink(message)]
         fn get_chain_id(&self) -> u32 {
             self.chain_id
+        }
+
+        /// Get cached transaction
+        #[ink(message)]
+        fn get_cached_transaction(&self, pk: [u8; 64]) -> Option<OmniverseTx> {
+            let cache = self.transaction_cache.get(&pk);
+            match cache {
+                Some(c) => Some(c.clone()),
+                None => None
+            }
+        }
+
+        /// Trigger execution
+        #[ink(message)]
+        fn trigger_execution(&mut self, pk: [u8; 64], nonce: u128) -> Result<(), Error> {
+            let cache = self.transaction_cache.get(&pk).ok_or(Error::TransactionNotCached)?;
+            if cache.tx_data.nonce != nonce {
+                return Err(Error::NonceNotMatch);
+            }
+
+            if cache.timestamp + self.cd_time < self.env().block_timestamp() {
+                return Err(Error::CoolingDown);
+            }
+            let mut rc = self.transaction_recorder.get(&pk).unwrap_or(&RecordedCertificate::default()).clone();
+            rc.tx_list.push(cache.clone());
+            self.transaction_cache.remove(&pk);
+            self.transaction_recorder.insert(pk, rc);
+            Ok(())
         }
     }
 
@@ -252,6 +278,28 @@ mod omniverse_protocol {
         }
 
         #[ink::test]
+        fn trigger_execution_works() {
+            let mut omniverse_protocol = OmniverseProtocol::new(0);
+            // Transaction not cached
+            assert_eq!(omniverse_protocol.trigger_execution([0_u8; 64], 0), Err(Error::TransactionNotCached));
+            // Nonce not match
+            let mut transaction_data = OmniverseTransactionData {
+                nonce: 0,
+                chain_id: 1,
+                initiate_sc: ink::prelude::vec::Vec::new(),
+                from: [0; 64],
+                payload: ink::prelude::vec::Vec::new(),
+                signature: [0; 65],
+            };
+            omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
+            assert_eq!(omniverse_protocol.trigger_execution(transaction_data.from, 1), Err(Error::NonceNotMatch));
+            // Succeed
+            assert_eq!(omniverse_protocol.trigger_execution(transaction_data.from, 0), Ok(()));
+            assert_eq!(omniverse_protocol.get_transaction_count(transaction_data.from), 1);
+            assert_eq!(omniverse_protocol.transaction_cache.get(&transaction_data.from).is_none(), true);
+        }
+
+        #[ink::test]
         fn send_omniverse_transaction_works() {
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
@@ -275,9 +323,8 @@ mod omniverse_protocol {
 	        let sig_recovery = get_sig_slice(&sig);
             transaction_data.signature = sig_recovery;
             assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Ok(()));
-            let mut rc = RecordedCertificate::default();
-            rc.tx_list.push(OmniverseTx::new(transaction_data.clone(), 0));
-            omniverse_protocol.transaction_recorder.insert(transaction_data.from, rc);
+            let trigger_ret = omniverse_protocol.trigger_execution(transaction_data.from, transaction_data.nonce);
+            assert_eq!(trigger_ret, Ok(()));
             let count = omniverse_protocol.get_transaction_count(transaction_data.from);
             assert_eq!(count, 1);
             assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::Duplicated));
