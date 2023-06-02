@@ -1,16 +1,14 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
 
-mod traits;
-mod types;
-mod functions;
-
-pub use traits::*;
-pub use types::*;
-pub use functions::*;
+pub mod traits;
+pub mod types;
+pub mod functions;
 
 #[ink::contract]
 mod omniverse_protocol {
-    use super::*;
+    pub use super::traits::*;
+    pub use super::types::*;
+    pub use super::functions::*;
     use ink::prelude::collections::BTreeMap;
     pub const DEFAULT_CD: u64 = 10;
 
@@ -22,6 +20,12 @@ mod omniverse_protocol {
 
     #[ink(event)]
     pub struct TransactionDuplicated {
+        pk: [u8; 64],
+        nonce: u128,
+    }
+
+    #[ink(event)]
+    pub struct TransactionExecuted {
         pk: [u8; 64],
         nonce: u128,
     }
@@ -146,7 +150,11 @@ mod omniverse_protocol {
             let mut rc = self.transaction_recorder.get(&pk).unwrap_or(&RecordedCertificate::default()).clone();
             rc.tx_list.push(cache.clone());
             self.transaction_cache.remove(&pk);
-            self.transaction_recorder.insert(pk, rc);
+            self.transaction_recorder.insert(pk.clone(), rc);                
+            Self::env().emit_event(TransactionExecuted {
+                pk,
+                nonce,
+            });
             Ok(())
         }
     }

@@ -1,7 +1,9 @@
 use crate::{
-    OmniverseTransactionData,
-    OmniverseTx,
-    Error,
+    types::{
+        OmniverseTransactionData,
+        OmniverseTx,
+        Error,
+    },
 };
 
 #[ink::trait_definition]
