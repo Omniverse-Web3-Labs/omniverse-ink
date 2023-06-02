@@ -77,6 +77,29 @@ impl RecordedCertificate {
     }
 }
 
+#[derive(Debug, Decode, Encode, Clone, scale_info::TypeInfo)]
+pub struct Member {
+    pub chain_id: u32,
+    pub contract_address: Vec<u8>,
+}
+
+#[derive(Encode, Decode)]
+pub struct OmniverseFungible {
+    pub op: u8,
+    pub ex_data: [u8; 64],
+    pub amount: u128,
+}
+
+impl OmniverseFungible {
+    pub fn new(op: u8, ex_data: [u8; 64], amount: u128) -> Self {
+        Self {
+            op,
+            ex_data,
+            amount,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Encode, Decode, Clone, scale_info::TypeInfo)]
 pub enum Error {
     Malicious,
@@ -90,6 +113,11 @@ pub enum Error {
     NonceNotMatch,
     CoolingDown,
     NotOwner,
-    NotAppContract,
-    AppContractNotSet,
+    NoDelayedTx,
+    NotCached,
+    PayloadError,
+    ExceedBalance,
+    NotMember,
+    WrongInitiator,
+    WrongOpCode,
 }
