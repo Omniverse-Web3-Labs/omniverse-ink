@@ -6,7 +6,7 @@ pub mod functions;
 
 #[ink::contract]
 mod omniverse_ft {
-    use super::traits::*;
+    // use super::traits::*;
     use super::types::*;
     use super::functions::*;
     use omniverse_protocol::types::{
@@ -190,21 +190,36 @@ mod omniverse_ft {
     mod tests {
         /// Imports all the definitions from the outer scope so we can use them here.
         use super::*;
+        use ink::env::{
+            test::{self, default_accounts},
+            DefaultEnvironment,
+        };
 
-        /// We test if the default constructor does its job.
+        /// We test if the constructor does its job.
         #[ink::test]
-        fn default_works() {
-            let omniverse_ft = OmniverseFt::default();
-            assert_eq!(omniverse_ft.get(), false);
+        fn new_works() {
+            let omniverse_ft = OmniverseFt::new("FT".to_string(), "FT".to_string());
+            assert_eq!(omniverse_ft.symbol, "FT".to_string());
         }
 
-        /// We test a simple use case of our contract.
         #[ink::test]
-        fn it_works() {
-            let mut omniverse_ft = OmniverseFt::new(false);
-            assert_eq!(omniverse_ft.get(), false);
-            omniverse_ft.flip();
-            assert_eq!(omniverse_ft.get(), true);
+        fn set_members_works() {
+            let mut omniverse_ft = OmniverseFt::new("FT".to_string(), "FT".to_string());
+            
+            let mut members = Vec::<Member>::new();
+            members.push(Member {chain_id: 0, contract_address: Vec::<u8>::new()});
+            members.push(Member {chain_id: 1, contract_address: Vec::<u8>::new()});
+            assert_eq!(omniverse_ft.set_members(members), Ok(()));
+        }
+
+        #[ink::test]
+        fn only_owner_works() {
+            let accounts = default_accounts::<DefaultEnvironment>();
+            let omniverse_ft = OmniverseFt::new("FT".to_string(), "FT".to_string());
+            assert_eq!(omniverse_ft.only_owner(), Ok(()));
+            // Caller not owner
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            assert_eq!(omniverse_ft.only_owner(), Err(Error::NotOwner));
         }
     }
 
