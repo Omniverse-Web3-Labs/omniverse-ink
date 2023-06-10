@@ -9,6 +9,10 @@ mod omniverse_protocol {
     pub use super::traits::*;
     pub use super::types::*;
     pub use super::functions::*;
+    use scale::{
+        Encode,
+        Decode,
+    };
     use ink::prelude::collections::BTreeMap;
     pub const DEFAULT_CD: u64 = 10;
 
@@ -37,7 +41,7 @@ mod omniverse_protocol {
     pub struct OmniverseProtocol {
         // Data for Ownable
         /// Account id of owner
-        owner: Option<AccountId>,
+        owner: AccountId,
 
         // Properties for omniverse protocol
         /// Chain id
@@ -79,8 +83,11 @@ mod omniverse_protocol {
             let ret = self.transaction_recorder.get(&pk);
             match ret {
                 None => None,
-                Some(record) => {
-                    record.tx_list.get(nonce as usize)
+                Some(&ref record) => {
+                    match record.tx_list.get(nonce as usize) {
+                        None => None,
+                        Some(&ref data) => Some(data.clone()),
+                    }
                 },
             }
         }
@@ -163,10 +170,11 @@ mod omniverse_protocol {
     impl OmniverseProtocol {
         /// Constructor
         #[ink(constructor)]
-        pub fn new(chain_id: u32, name: String, symbol: String) -> Self {
-            let caller = Self::env().caller();
+        pub fn new(chain_id: u32, owner: [u8; 64], name: String, symbol: String) -> Self {
+            let compressed_pubkey = compress_public_key(owner);
+            let account_id = compressed_pubkey_to_account(compressed_pubkey);
             Self {
-                owner: Some(caller),
+                owner: account_id,
                 chain_id,
                 cd_time: DEFAULT_CD,
                 transaction_recorder: BTreeMap::new(),
@@ -203,7 +211,7 @@ mod omniverse_protocol {
 
                     let cache = OmniverseTx::new(data.clone(), self.env().block_timestamp());
                     // Logic verification
-                    self.check_execution(&data);
+                    self.check_execution(&data)?;
                     self.transaction_cache.insert(data.from.clone(), cache);
                     Self::env().emit_event(TransactionSent {
                         pk: data.from,
@@ -233,7 +241,7 @@ mod omniverse_protocol {
                 return Err(Error::NonceNotMatch);
             }
 
-            if cache.timestamp + self.cd_time < self.env().block_timestamp() {
+            if cache.timestamp + self.cd_time > self.env().block_timestamp() {
                 return Err(Error::CoolingDown);
             }
             let mut rc = self.transaction_recorder.get(&pk).unwrap_or(&RecordedCertificate::default()).clone();
@@ -302,7 +310,7 @@ mod omniverse_protocol {
         /// If the caller is the owner of the contract
         fn only_owner(&self) -> Result<(), Error> {
             let caller = self.env().caller();
-            if self.owner.unwrap() != caller {
+            if self.owner != caller {
                 return Err(Error::NotOwner);
             }
 
@@ -313,7 +321,7 @@ mod omniverse_protocol {
         fn check_owner(&self, pk: [u8; 64]) -> Result<(), Error> {
             let compressed_pubkey = compress_public_key(pk);
             let account_id = compressed_pubkey_to_account(compressed_pubkey);
-            if account_id != self.owner.unwrap() {
+            if account_id != self.owner {
                 return Err(Error::NotOwner);
             }
 
@@ -322,7 +330,7 @@ mod omniverse_protocol {
 
         fn check_omniverse_transfer(&self, from: [u8; 64], amount: u128) -> Result<(), Error> {
             let balance = self.omniverse_balances.get(&from).unwrap_or(&0).clone();
-            match balance > amount {
+            match balance < amount {
                 true => Err(Error::ExceedBalance),
                 false => Ok(()),
             }
@@ -332,7 +340,7 @@ mod omniverse_protocol {
             self.check_omniverse_transfer(from, amount)?;
 
             let from_balance = self.omniverse_balances.get(&from).unwrap().clone();
-            let to_balance = self.omniverse_balances.get(&to).unwrap().clone();
+            let to_balance = self.omniverse_balances.get(&to).unwrap_or(&0).clone();
             self.omniverse_balances.insert(from, from_balance - amount);
             self.omniverse_balances.insert(to, to_balance + amount);
             Ok(())
@@ -346,7 +354,7 @@ mod omniverse_protocol {
 
         fn check_omniverse_burn(&self, from: [u8; 64], amount: u128) -> Result<(), Error> {
             let balance = self.omniverse_balances.get(&from).unwrap_or(&0).clone();
-            match balance > amount {
+            match balance < amount {
                 true => Err(Error::ExceedBalance),
                 false => Ok(()),
             }
@@ -407,6 +415,9 @@ mod omniverse_protocol {
             246,  83, 204,  25,  86,  45,  95, 211
         ];
 
+        const OWNER_PK: [u8; 64] = [0; 64];
+        const USER_PK: [u8; 64] = [1; 64];
+
         const EXPECTED_COMPRESSED_PUBLIC_KEY: [u8; 33] = [
             2,144,101,32,18,128,96,228,162,202,76,18,107,219,5,157,35,133,125,153,254,81,97,69,51,241,57,23,173,207,216,227,161
         ];
@@ -422,7 +433,7 @@ mod omniverse_protocol {
         /// We test if the constructor does its job.
         #[ink::test]
         fn new_works() {
-            let omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             assert_eq!(omniverse_protocol.get_chain_id(), 0);
         }
 
@@ -430,100 +441,102 @@ mod omniverse_protocol {
         // For fungible tokens
         #[ink::test]
         fn check_owner_works() {
-            // let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             
-            // omniverse_protocol.check_owner()
+            assert_eq!(omniverse_protocol.check_owner(USER_PK), Err(Error::NotOwner));
+            test::set_caller::<DefaultEnvironment>(compressed_pubkey_to_account(compress_public_key(OWNER_PK)));
+            assert_eq!(omniverse_protocol.check_owner(OWNER_PK), Ok(()));
         }
 
         #[ink::test]
         fn check_omniverse_burn_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // Exceed balance
-            assert_eq!(omniverse_protocol.check_omniverse_burn(accounts.alice, 1000), Err(Error::ExceedBalance));
+            assert_eq!(omniverse_protocol.check_omniverse_burn(USER_PK, 1000), Err(Error::ExceedBalance));
             // Enough balance
-            omniverse_protocol.omniverse_balances.insert(&accounts.alice, 1000);
-            assert_eq!(omniverse_protocol.check_omniverse_burn(accounts.alice, 1000), Ok(()));
+            omniverse_protocol.omniverse_balances.insert(USER_PK, 1000);
+            assert_eq!(omniverse_protocol.check_omniverse_burn(USER_PK, 1000), Ok(()));
         }
 
         #[ink::test]
         fn check_omniverse_transfer_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // Exceed balance
-            assert_eq!(omniverse_protocol.check_omniverse_transfer(accounts.alice, 1000), Err(Error::ExceedBalance));
+            assert_eq!(omniverse_protocol.check_omniverse_transfer(USER_PK, 1000), Err(Error::ExceedBalance));
             // Enough balance
-            omniverse_protocol.omniverse_balances.insert(&accounts.alice, 1000);
-            assert_eq!(omniverse_protocol.check_omniverse_transfer(accounts.alice, 1000), Ok(()));
+            omniverse_protocol.omniverse_balances.insert(USER_PK, 1000);
+            assert_eq!(omniverse_protocol.check_omniverse_transfer(USER_PK, 1000), Ok(()));
         }
 
         #[ink::test]
         fn omniverse_transfer_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
 
-            omniverse_protocol.omniverse_balances.insert(&accounts.alice, 1000);
-            assert_eq!(omniverse_protocol.omniverse_transfer(accounts.alice, accounts.bob, 1000), Ok(()));
-            let balance = omniverse_protocol.omniverse_balances.get(accounts.alice).unwrap().clone();
+            omniverse_protocol.omniverse_balances.insert(USER_PK, 1000);
+            assert_eq!(omniverse_protocol.omniverse_transfer(USER_PK, OWNER_PK, 1000), Ok(()));
+            let balance = omniverse_protocol.omniverse_balances.get(&USER_PK).unwrap().clone();
             assert_eq!(balance, 0);
-            let balance = omniverse_protocol.omniverse_balances.get(accounts.bob).unwrap().clone();
+            let balance = omniverse_protocol.omniverse_balances.get(&OWNER_PK).unwrap().clone();
             assert_eq!(balance, 1000);
         }
 
         #[ink::test]
         fn omniverse_mint_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
 
-            assert_eq!(omniverse_protocol.omniverse_mint(accounts.alice, 1000), Ok(()));
-            let balance = omniverse_protocol.omniverse_balances.get(accounts.alice).unwrap().clone();
+            assert_eq!(omniverse_protocol.omniverse_mint(USER_PK, 1000), Ok(()));
+            let balance = omniverse_protocol.omniverse_balances.get(&USER_PK).unwrap().clone();
             assert_eq!(balance, 1000);
         }
 
         #[ink::test]
         fn omniverse_burn_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
 
-            omniverse_protocol.omniverse_balances.insert(&accounts.alice, 1000);
-            assert_eq!(omniverse_protocol.omniverse_burn(accounts.alice, 1000), Ok(()));
-            let balance = omniverse_protocol.omniverse_balances.get(accounts.alice).unwrap().clone();
+            omniverse_protocol.omniverse_balances.insert(USER_PK, 1000);
+            assert_eq!(omniverse_protocol.omniverse_burn(USER_PK, 1000), Ok(()));
+            let balance = omniverse_protocol.omniverse_balances.get(&USER_PK).unwrap().clone();
             assert_eq!(balance, 0);
         }
 
         #[ink::test]
         fn check_execution_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: OWNER_PK,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
 
+            // Payload error
+            assert_eq!(omniverse_protocol.check_execution(&transaction_data), Err(Error::PayloadError));
+
             // Op code error
-            let payload_item = OmniverseFungible::new(10, accounts.alice, 100);
-            transaction_data.payload = payload_item::encode();
-            assert_eq!(omniverse_protocol.check_execution(transaction_data), Err(Error::WrongOpCode));
+            let mut payload_item = OmniverseFungible::new(10, USER_PK, 100);
+            transaction_data.payload = payload_item.encode();
+            assert_eq!(omniverse_protocol.check_execution(&transaction_data), Err(Error::WrongOpCode));
             
             // Transfer
             payload_item.op = 0;
-            transaction_data.payload = payload_item::encode();
-            assert_eq!(omniverse_protocol.check_execution(transaction_data), Ok(()));
+            omniverse_protocol.omniverse_balances.insert(OWNER_PK, 100);
+            transaction_data.payload = payload_item.encode();
+            assert_eq!(omniverse_protocol.check_execution(&transaction_data), Ok(()));
 
             // Mint
             payload_item.op = 1;
-            transaction_data.payload = payload_item::encode();
-            assert_eq!(omniverse_protocol.check_execution(transaction_data), Ok(()));
+            transaction_data.payload = payload_item.encode();
+            test::set_caller::<DefaultEnvironment>(compressed_pubkey_to_account(compress_public_key(OWNER_PK)));
+            assert_eq!(omniverse_protocol.check_execution(&transaction_data), Ok(()));
 
             // Burn
             payload_item.op = 0;
-            transaction_data.payload = payload_item::encode();
-            omniverse_protocol.omniverse_balances.insert(accounts.alice, 100);
-            assert_eq!(omniverse_protocol.check_execution(transaction_data), Ok(()));
+            transaction_data.from = OWNER_PK;
+            omniverse_protocol.omniverse_balances.insert(OWNER_PK, 100);
+            transaction_data.payload = payload_item.encode();
+            assert_eq!(omniverse_protocol.check_execution(&transaction_data), Ok(()));
         }
 
         // For omniverse protocol
@@ -534,7 +547,7 @@ mod omniverse_protocol {
             ink::env::hash_bytes::<ink::env::hash::Sha2x256>(&msg.as_bytes(), &mut msg_hash);
             assert_eq!(msg_hash, message_hash);
             
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from("error message".as_bytes()), signature, EXPECTED_COMPRESSED_PUBLIC_KEY), false);
             assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from(msg.as_bytes()), signature, [0; 33]), false);
             assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from(msg.as_bytes()), signature, EXPECTED_COMPRESSED_PUBLIC_KEY), true);
@@ -542,19 +555,18 @@ mod omniverse_protocol {
 
         #[ink::test]
         fn verify_transaction_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: USER_PK,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
 
             // Wrong signature
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
-            assert_eq!(omniverse_protocol.verify_transaction(transaction_data.clone()), Err(Error::WrongSignature));
+            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data.clone()), Err(Error::WrongSignature));
 
             // Succeed
             let secp = Secp256k1::new();
@@ -566,15 +578,15 @@ mod omniverse_protocol {
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
             transaction_data.signature = sig_recovery;
-            assert_eq!(omniverse_protocol.verify_transaction(transaction_data.clone()), Ok(()));
-            let rc = RecordedCertificate::default();
+            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data.clone()), Ok(()));
+            let mut rc = RecordedCertificate::default();
             rc.tx_list.push(OmniverseTx::new(transaction_data.clone(), 0));
-            omniverse_protocol.transaction_recorder.insert(&transaction_data.from, rc);
+            omniverse_protocol.transaction_recorder.insert(transaction_data.from, rc);
             let count = omniverse_protocol.get_transaction_count(transaction_data.from);
             assert_eq!(count, 1);
 
             // Duplicate
-            assert_eq!(omniverse_protocol.verify_transaction(transaction_data.clone()), Err(Error::Duplicated));
+            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data.clone()), Err(Error::Duplicated));
 
             // Nonce error
             transaction_data.nonce = 10;
@@ -583,7 +595,7 @@ mod omniverse_protocol {
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
             transaction_data.signature = sig_recovery;
-            assert_eq!(omniverse_protocol.verify_transaction(transaction_data.clone()), Err(Error::NonceError));
+            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data.clone()), Err(Error::NonceError));
             
             // Malicious
             transaction_data.chain_id = 10;
@@ -593,26 +605,27 @@ mod omniverse_protocol {
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
             transaction_data.signature = sig_recovery;
-            assert_eq!(omniverse_protocol.verify_transaction(transaction_data.clone()), Err(Error::Malicious));
+            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data.clone()), Err(Error::Malicious));
         }
 
         #[ink::test]
         fn send_omniverse_transaction_internal_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
+            let secp = Secp256k1::new();
+            let (secret_key, public_key) = secp.generate_keypair(&mut OsRng);
+		    let pk: [u8; 64] = public_key.serialize_uncompressed()[1..].try_into().expect("");
+            let mut omniverse_protocol = OmniverseProtocol::new(0, pk, "FT".to_string(), "FT".to_string());
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: pk,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
 
             // Succeed
-            let secp = Secp256k1::new();
-            let (secret_key, public_key) = secp.generate_keypair(&mut OsRng);
-		    let pk: [u8; 64] = public_key.serialize_uncompressed()[1..].try_into().expect("");
-            transaction_data.from = pk;
+            let payload_item = OmniverseFungible::new(1, USER_PK, 100);
+            transaction_data.payload = payload_item.encode();
             let message = Message::from_slice(transaction_data.get_hash().as_slice())
 		    .expect("messages must be 32 bytes and are expected to be hashes");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
@@ -624,66 +637,62 @@ mod omniverse_protocol {
             assert_eq!(omniverse_protocol.send_omniverse_transaction_internal(transaction_data.clone()), Err(Error::TransactionCached));
 
             // User malicious
-            transaction_data.chain_id = 10;
-            transaction_data.nonce = 0;
-            let message = Message::from_slice(transaction_data.get_hash().as_slice())
-		    .expect("messages must be 32 bytes and are expected to be hashes");
-            let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
-	        let sig_recovery = get_sig_slice(&sig);
-            transaction_data.signature = sig_recovery;
-            assert_eq!(omniverse_protocol.send_omniverse_transaction_internal(transaction_data.clone()), Err(Error::Malicious));
+            let mut rc = omniverse_protocol.transaction_recorder.get(&pk).unwrap_or(&RecordedCertificate::default()).clone();
+            rc.evil_tx_list.push(EvilTxData::new(OmniverseTx::new(transaction_data.clone(), 0), 0));
+            omniverse_protocol.transaction_recorder.insert(transaction_data.from, rc);
             assert_eq!(omniverse_protocol.send_omniverse_transaction_internal(transaction_data.clone()), Err(Error::UserMalicious));
         }
 
         #[ink::test]
         fn trigger_execution_internal_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // Transaction not cached
-            assert_eq!(omniverse_protocol.trigger_execution_internal([0_u8; 64], 0), Err(Error::TransactionNotCached));
+            assert_eq!(omniverse_protocol.trigger_execution_internal(USER_PK, 0), Err(Error::TransactionNotCached));
             
             // Nonce not match
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: USER_PK,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
             assert_eq!(omniverse_protocol.trigger_execution_internal(transaction_data.from, 1), Err(Error::NonceNotMatch));
 
-            // Cooling down
-            assert_eq!(omniverse_protocol.trigger_execution_internal(transaction_data.from, 0), Err(Error::CoolingDown));
-
             // Succeed
+            ink::env::test::set_block_timestamp::<DefaultEnvironment>(100);
             assert_eq!(omniverse_protocol.trigger_execution_internal(transaction_data.from, 0), Ok(()));
             assert_eq!(omniverse_protocol.get_transaction_count(transaction_data.from), 1);
             assert_eq!(omniverse_protocol.transaction_cache.get(&transaction_data.from).is_none(), true);
+
+            // Cooling down
+            ink::env::test::set_block_timestamp::<DefaultEnvironment>(0);
+            omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
+            assert_eq!(omniverse_protocol.trigger_execution_internal(transaction_data.from, 0), Err(Error::CoolingDown));
         }
 
         #[ink::test]
         fn only_owner_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
-            assert_eq!(omniverse_protocol.only_owner(), Ok(()));
+            let omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // Caller not owner
-            test::set_caller::<DefaultEnvironment>(accounts.bob);
             assert_eq!(omniverse_protocol.only_owner(), Err(Error::NotOwner));
+            // Caller is owner
+            test::set_caller::<DefaultEnvironment>(compressed_pubkey_to_account(compress_public_key(OWNER_PK)));
+            assert_eq!(omniverse_protocol.only_owner(), Ok(()));
         }
 
         //====================== Check message functions ========================
         // For fungible token
         #[ink::test]
         fn trigger_execution_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // No delayed tx
             assert_eq!(omniverse_protocol.trigger_execution(), Err(Error::NoDelayedTx));
 
             // Not cached
-            omniverse_protocol.delayed_txs.push(([0_u8; 64], 0));
+            omniverse_protocol.delayed_txs.push((OWNER_PK, 0));
             assert_eq!(omniverse_protocol.trigger_execution(), Err(Error::NotCached));
 
             // Nonce error
@@ -691,53 +700,68 @@ mod omniverse_protocol {
                 nonce: 1,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: OWNER_PK,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
             assert_eq!(omniverse_protocol.trigger_execution(), Err(Error::NonceError));
 
-            // Mint
-            let payload_item = OmniverseFungible::new(1, [0; 64], 100);
-            transaction_data.payload = payload_item::encode();
+            // Payload error
             transaction_data.nonce = 0;
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
+            ink::env::test::set_block_timestamp::<DefaultEnvironment>(100);
+            assert_eq!(omniverse_protocol.trigger_execution(), Err(Error::PayloadError));
+
+            // Mint
+            let mut tx_count: u128 = 1;
+            let payload_item = OmniverseFungible::new(1, OWNER_PK, 100);
+            transaction_data.payload = payload_item.encode();
+            omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
+            test::set_caller::<DefaultEnvironment>(compressed_pubkey_to_account(compress_public_key(OWNER_PK)));
+            ink::env::test::set_block_timestamp::<DefaultEnvironment>(100);
+            omniverse_protocol.delayed_txs.push((OWNER_PK, 0));
             assert_eq!(omniverse_protocol.trigger_execution(), Ok(()));
-            assert_eq!(omniverse_protocol.get_transaction_count(transaction_data.from), 1);
+            assert_eq!(omniverse_protocol.get_transaction_count(transaction_data.from), tx_count);
             assert_eq!(omniverse_protocol.transaction_cache.get(&transaction_data.from).is_none(), true);
-            assert_eq!(omniverse_protocol.omniverse_balances.get(&[0; 64]).unwrap(), &100);
+            assert_eq!(omniverse_protocol.omniverse_balances.get(&OWNER_PK).unwrap(), &100);
 
             // Transfer
-            let payload_item = OmniverseFungible::new(0, [1; 64], 100);
-            transaction_data.payload = payload_item::encode();
+            tx_count += 1;
+            let payload_item = OmniverseFungible::new(0, USER_PK, 100);
+            transaction_data.payload = payload_item.encode();
             transaction_data.nonce = 0;
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
+            omniverse_protocol.delayed_txs.push((OWNER_PK, 0));
             assert_eq!(omniverse_protocol.trigger_execution(), Ok(()));
-            assert_eq!(omniverse_protocol.get_transaction_count(transaction_data.from), 1);
+            assert_eq!(omniverse_protocol.get_transaction_count(transaction_data.from), tx_count);
             assert_eq!(omniverse_protocol.transaction_cache.get(&transaction_data.from).is_none(), true);
-            assert_eq!(omniverse_protocol.omniverse_balances.get(&[1; 64]).unwrap(), &100);
+            assert_eq!(omniverse_protocol.omniverse_balances.get(&USER_PK).unwrap(), &100);
 
             // Burn
-            let payload_item = OmniverseFungible::new(2, [1; 64], 100);
-            transaction_data.payload = payload_item::encode();
+            tx_count += 1;
+            let payload_item = OmniverseFungible::new(2, USER_PK, 100);
+            transaction_data.payload = payload_item.encode();
             transaction_data.nonce = 0;
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
+            omniverse_protocol.delayed_txs.push((OWNER_PK, 0));
             assert_eq!(omniverse_protocol.trigger_execution(), Ok(()));
-            assert_eq!(omniverse_protocol.get_transaction_count(transaction_data.from), 1);
+            assert_eq!(omniverse_protocol.get_transaction_count(transaction_data.from), tx_count);
             assert_eq!(omniverse_protocol.transaction_cache.get(&transaction_data.from).is_none(), true);
-            assert_eq!(omniverse_protocol.omniverse_balances.get(&[1; 64]).unwrap(), &100);
+            assert_eq!(omniverse_protocol.omniverse_balances.get(&USER_PK).unwrap(), &0);
         }
 
         #[ink::test]
         fn send_omniverse_transaction_works() {
-            let accounts = default_accounts::<DefaultEnvironment>();
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let secp = Secp256k1::new();
+            let (secret_key, public_key) = secp.generate_keypair(&mut OsRng);
+		    let pk: [u8; 64] = public_key.serialize_uncompressed()[1..].try_into().expect("");
+            let mut omniverse_protocol = OmniverseProtocol::new(0, pk, "FT".to_string(), "FT".to_string());
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: pk,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
@@ -746,14 +770,16 @@ mod omniverse_protocol {
             assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::NotMember));
 
             // Wrong initiator
-            omniverse_protocol.members.insert(&1, Member::new(1, vec![1]));
+            omniverse_protocol.members.insert(1_u32, Member {chain_id: 1, contract_address: vec![1]});
             assert_eq!(omniverse_protocol.send_omniverse_transaction(transaction_data.clone()), Err(Error::WrongInitiator));
 
             // Succeed
-            let secp = Secp256k1::new();
-            let (secret_key, public_key) = secp.generate_keypair(&mut OsRng);
-		    let pk: [u8; 64] = public_key.serialize_uncompressed()[1..].try_into().expect("");
-            transaction_data.from = pk;
+            let mut members = Vec::<Member>::new();
+            members.push(Member {chain_id: 1, contract_address: Vec::<u8>::new()});
+            test::set_caller::<DefaultEnvironment>(compressed_pubkey_to_account(compress_public_key(pk)));
+            assert_eq!(omniverse_protocol.set_members(members), Ok(()));
+            let mut payload_item = OmniverseFungible::new(1, USER_PK, 100);
+            transaction_data.payload = payload_item.encode();
             let message = Message::from_slice(transaction_data.get_hash().as_slice())
 		    .expect("messages must be 32 bytes and are expected to be hashes");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
@@ -764,84 +790,85 @@ mod omniverse_protocol {
 
         #[ink::test]
         fn set_members_works() {
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             
             let mut members = Vec::<Member>::new();
             members.push(Member {chain_id: 0, contract_address: Vec::<u8>::new()});
             members.push(Member {chain_id: 1, contract_address: Vec::<u8>::new()});
+            test::set_caller::<DefaultEnvironment>(compressed_pubkey_to_account(compress_public_key(OWNER_PK)));
             assert_eq!(omniverse_protocol.set_members(members), Ok(()));
         }
 
         // For fungible token
-        #[ink(message)]
+        #[ink::test]
         fn get_transaction_count_works() {
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // No transaction
-            assert_eq!(omniverse_protocol.get_transaction_count(), 0);
+            assert_eq!(omniverse_protocol.get_transaction_count(USER_PK), 0);
 
             // Transactions exist
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: USER_PK,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
-            let mut rc = self.transaction_recorder.get(&pk).unwrap_or(&RecordedCertificate::default()).clone();
-            rc.tx_list.push(transaction_data.clone());
-            omniverse_protocol.transaction_recorder.insert([0; 64], rc.clone());
-            assert_eq!(omniverse_protocol.get_transaction_count(), 1);
+            let mut rc = omniverse_protocol.transaction_recorder.get(&transaction_data.from).unwrap_or(&RecordedCertificate::default()).clone();
+            rc.tx_list.push(OmniverseTx::new(transaction_data.clone(), 0));
+            omniverse_protocol.transaction_recorder.insert(USER_PK, rc.clone());
+            assert_eq!(omniverse_protocol.get_transaction_count(USER_PK), 1);
         }
 
-        #[ink(message)]
+        #[ink::test]
         fn get_transaction_data_works() {
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // No record
-            assert_eq!(omniverse_protocol.get_transaction_data([0; 64], 0).is_none());
+            assert_eq!(omniverse_protocol.get_transaction_data(USER_PK, 0).is_none(), true);
 
             // Data not found
-            let mut rc = self.transaction_recorder.get(&pk).unwrap_or(&RecordedCertificate::default()).clone();
-            omniverse_protocol.transaction_recorder.insert([0; 64], rc.clone());
-            assert_eq!(omniverse_protocol.get_transaction_data([0; 64], 0).is_none());
+            let mut rc = omniverse_protocol.transaction_recorder.get(&USER_PK).unwrap_or(&RecordedCertificate::default()).clone();
+            omniverse_protocol.transaction_recorder.insert(USER_PK, rc.clone());
+            assert_eq!(omniverse_protocol.get_transaction_data(USER_PK, 0).is_none(), true);
 
             // Data found
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: USER_PK,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
-            omniverse_protocol.transaction_recorder.insert([0; 64], rc.clone());
-            rc.tx_list.push(transaction_data.clone());
-            assert_eq!(omniverse_protocol.get_transaction_data([0; 64], 0).is_some());
+            rc.tx_list.push(OmniverseTx::new(transaction_data.clone(), 0));
+            omniverse_protocol.transaction_recorder.insert(USER_PK, rc.clone());
+            assert_eq!(omniverse_protocol.get_transaction_data(USER_PK, 0).is_some(), true);
         }
 
-        #[ink(message)]
+        #[ink::test]
         fn get_chain_id_works() {
-            let mut omniverse_protocol = OmniverseProtocol::new(10, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(10, OWNER_PK, "FT".to_string(), "FT".to_string());
             assert_eq!(omniverse_protocol.get_chain_id(), 10);
         }
 
-        #[ink(message)]
+        #[ink::test]
         fn get_cached_transaction_works() {
-            let mut omniverse_protocol = OmniverseProtocol::new(0, "FT".to_string(), "FT".to_string());
+            let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // No cached data
-            assert_eq!(omniverse_protocol.get_cached_transaction().is_none());
+            assert_eq!(omniverse_protocol.get_cached_transaction(USER_PK).is_none(), true);
 
             // Cached data exist
             let mut transaction_data = OmniverseTransactionData {
                 nonce: 0,
                 chain_id: 1,
                 initiate_sc: ink::prelude::vec::Vec::new(),
-                from: [0; 64],
+                from: USER_PK,
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
-            assert_eq!(omniverse_protocol.get_cached_transaction().is_some());
+            assert_eq!(omniverse_protocol.get_cached_transaction(USER_PK).is_some(), true);
         }
     }
 
