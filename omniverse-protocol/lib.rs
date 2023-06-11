@@ -13,7 +13,11 @@ mod omniverse_protocol {
         Encode,
         Decode,
     };
-    use ink::prelude::collections::BTreeMap;
+    use ink::prelude::{
+        vec::Vec,
+        collections::BTreeMap,
+        string::String,
+    };
     pub const DEFAULT_CD: u64 = 10;
 
     #[ink(event)]
@@ -714,7 +718,7 @@ mod omniverse_protocol {
             assert_eq!(omniverse_protocol.trigger_execution(), Err(Error::PayloadError));
 
             // Mint
-            let mut tx_count: u128 = 1;
+            let mut tx_count: u128 = 2;
             let payload_item = OmniverseFungible::new(1, OWNER_PK, 100);
             transaction_data.payload = payload_item.encode();
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));

@@ -2,8 +2,10 @@ use scale::{
     Encode,
     Decode,
 };
+use ink::prelude::vec::Vec;
 
-#[derive(Debug, Decode, Encode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, Decode, Encode, Clone)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
 pub struct OmniverseTransactionData {
     pub nonce: u128,
     pub chain_id: u32,
@@ -32,7 +34,8 @@ impl OmniverseTransactionData {
     }
 }
 
-#[derive(Debug, Decode, Encode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, Decode, Encode, Clone)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
 pub struct OmniverseTx {
     pub tx_data: OmniverseTransactionData,
     pub timestamp: u64,
@@ -47,7 +50,8 @@ impl OmniverseTx {
     }
 }
 
-#[derive(Debug, Decode, Encode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, Decode, Encode, Clone)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
 pub struct EvilTxData {
     o_data: OmniverseTx,
     his_nonce: u128,
@@ -62,7 +66,8 @@ impl EvilTxData {
     }
 }
 
-#[derive(Debug, Decode, Encode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, Decode, Encode, Clone)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
 pub struct RecordedCertificate {
     pub tx_list: Vec<OmniverseTx>,
     pub evil_tx_list: Vec<EvilTxData>,
@@ -77,7 +82,8 @@ impl RecordedCertificate {
     }
 }
 
-#[derive(Debug, Decode, Encode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, Decode, Encode, Clone)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
 pub struct Member {
     pub chain_id: u32,
     pub contract_address: Vec<u8>,
@@ -100,7 +106,8 @@ impl OmniverseFungible {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Encode, Decode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, PartialEq, Eq, Encode, Decode, Clone)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
 pub enum Error {
     Malicious,
     UserMalicious,

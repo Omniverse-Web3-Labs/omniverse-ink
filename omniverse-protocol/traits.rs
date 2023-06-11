@@ -6,6 +6,7 @@ use crate::{
         Member,
     },
 };
+use ink::prelude::vec::Vec;
 
 #[ink::trait_definition]
 pub trait Omniverse {
