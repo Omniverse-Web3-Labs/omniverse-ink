@@ -35,4 +35,10 @@ pub trait FungibleToken {
     /// Set members
     #[ink(message)]
     fn set_members(&mut self, members: Vec<Member>) -> Result<(), Error>;
+    /// Get members
+    #[ink(message)]
+    fn get_members(&self) -> Vec<Member>;
+    /// Get executable transaction
+    #[ink(message)]
+    fn get_executable_delayed_transaction(&self) -> Option<([u8; 64], u128)>;
 }

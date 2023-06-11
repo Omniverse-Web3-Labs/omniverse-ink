@@ -122,7 +122,11 @@ mod omniverse_protocol {
                 return Err(Error::WrongInitiator);
             }
 
-            self.send_omniverse_transaction_internal(data)
+            let ret = self.send_omniverse_transaction_internal(data.clone());
+            if ret == Ok(()) {
+                self.delayed_txs.push((data.from, data.nonce));
+            }
+            ret
         }
         
         /// Trigger execution
@@ -168,6 +172,27 @@ mod omniverse_protocol {
                 self.members.insert(m.chain_id, m.clone());
             }
             Ok(())
+        }
+
+        #[ink(message)]
+        fn get_members(&self) -> Vec<Member> {
+            let mut ret = Vec::<Member>::new();
+            for (key, value) in self.members.iter() {
+                ret.push(value.clone());
+            }
+            ret
+        }
+
+        /// Get executable transaction
+        #[ink(message)]
+        fn get_executable_delayed_transaction(&self) -> Option<([u8; 64], u128)> {
+            if self.delayed_txs.len() > 0 {
+                let cache = self.get_cached_transaction(self.delayed_txs[0].0).unwrap();
+                if self.env().block_timestamp() >= cache.timestamp + self.cd_time {
+                    return Some(self.delayed_txs[0].clone());
+                }
+            }
+            None
         }
     }
 
