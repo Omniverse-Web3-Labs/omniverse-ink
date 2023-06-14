@@ -111,6 +111,14 @@ mod omniverse_protocol {
                 None => None
             }
         }
+
+        /// Set cooling down time
+        #[ink(message)]
+        fn set_cooling_down(&mut self, cd_time: u32) -> Result<(), Error> {
+            self.only_owner()?
+            self.cd_time = cd_time;
+            Ok(())
+        }
     }
 
     impl FungibleToken for OmniverseProtocol {
@@ -193,6 +201,12 @@ mod omniverse_protocol {
                 }
             }
             None
+        }
+
+        /// Get omniverse balance
+        #[ink(message)]
+        fn balance_of(&self, pk: [u8; 64]) -> u128 {
+            self.omniverse_balances.get(&pk).unwrap_or(&0).clone()
         }
     }
 

@@ -22,6 +22,9 @@ pub trait Omniverse {
     /// Get cached transaction
     #[ink(message)]
     fn get_cached_transaction(&self, pk: [u8; 64]) -> Option<OmniverseTx>;
+    /// Set cooling down time
+    #[ink(message)]
+    fn set_cooling_down(&mut self, cd_time: u32) -> Result<(), Error>;
 }
 
 #[ink::trait_definition]
@@ -41,4 +44,7 @@ pub trait FungibleToken {
     /// Get executable transaction
     #[ink(message)]
     fn get_executable_delayed_transaction(&self) -> Option<([u8; 64], u128)>;
+    /// Get omniverse balance
+    #[ink(message)]
+    fn balance_of(&self, pk: [u8; 64]) -> u128;
 }
