@@ -24,7 +24,7 @@ pub trait Omniverse {
     fn get_cached_transaction(&self, pk: [u8; 64]) -> Option<OmniverseTx>;
     /// Set cooling down time
     #[ink(message)]
-    fn set_cooling_down(&mut self, cd_time: u32) -> Result<(), Error>;
+    fn set_cooling_down(&mut self, cd_time: u64) -> Result<(), Error>;
 }
 
 #[ink::trait_definition]

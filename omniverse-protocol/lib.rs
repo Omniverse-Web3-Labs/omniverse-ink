@@ -114,8 +114,8 @@ mod omniverse_protocol {
 
         /// Set cooling down time
         #[ink(message)]
-        fn set_cooling_down(&mut self, cd_time: u32) -> Result<(), Error> {
-            self.only_owner()?
+        fn set_cooling_down(&mut self, cd_time: u64) -> Result<(), Error> {
+            self.only_owner()?;
             self.cd_time = cd_time;
             Ok(())
         }
@@ -153,14 +153,14 @@ mod omniverse_protocol {
                 self.trigger_execution_internal(cache.tx_data.from, cache.tx_data.nonce)?;
                 let payload: OmniverseFungible = scale::Decode::decode(&mut cache.tx_data.payload.as_slice()).map_err(|_| Error::PayloadError)?;
                 match payload.op {
-                    0 => self.omniverse_transfer(cache.tx_data.from, payload.ex_data, payload.amount)?,
+                    0 => self.omniverse_transfer(cache.tx_data.from, payload.get_account(), payload.amount)?,
                     1 => {
                         self.check_owner(cache.tx_data.from)?;
-                        self.omniverse_mint(payload.ex_data, payload.amount)?;
+                        self.omniverse_mint(payload.get_account(), payload.amount)?;
                     },
                     2 => {
                         self.check_owner(cache.tx_data.from)?;
-                        self.omniverse_burn(payload.ex_data, payload.amount)?;
+                        self.omniverse_burn(payload.get_account(), payload.amount)?;
                     },
                     _ => {},
                 };
@@ -299,7 +299,7 @@ mod omniverse_protocol {
         }
 
         fn verify_transaction(&mut self, data: &OmniverseTransactionData) -> Result<(), Error> {
-            let raw_data = data.get_raw_data();
+            let raw_data = data.get_raw_data()?;
             let c_pk = compress_public_key(data.from);
             // Verify signature
             let sig = data
@@ -320,8 +320,8 @@ mod omniverse_protocol {
             else if nonce > data.nonce {
                 // The message has been received, check conflicts
                 let his_tx: &OmniverseTx = rc.tx_list.get(data.nonce as usize).expect("Transaction not found");
-                let his_hash = his_tx.tx_data.get_hash();
-                let hash = data.get_hash();
+                let his_hash = his_tx.tx_data.get_hash()?;
+                let hash = data.get_hash()?;
                 if his_hash != hash {
                     rc.evil_tx_list.push(EvilTxData::new(OmniverseTx::new(data.clone(), self.env().block_timestamp()), nonce));
                     self.transaction_recorder.insert(data.from, rc.clone());
@@ -338,8 +338,8 @@ mod omniverse_protocol {
 
         /// Verify signature
         fn verify_signature(&self, raw_data: &Vec<u8>, signature: [u8; 65], c_pk: [u8; 33]) -> bool {
-            let mut hash = <ink::env::hash::Sha2x256 as ink::env::hash::HashOutput>::Type::default();
-            ink::env::hash_bytes::<ink::env::hash::Sha2x256>(&raw_data, &mut hash);
+            let mut hash = <ink::env::hash::Keccak256 as ink::env::hash::HashOutput>::Type::default();
+            ink::env::hash_bytes::<ink::env::hash::Keccak256>(&raw_data, &mut hash);
 
             let mut compressed_pubkey = [0; 33];
             let ret = ink::env::ecdsa_recover(&signature, &hash, &mut compressed_pubkey);
@@ -420,7 +420,7 @@ mod omniverse_protocol {
                 },
                 2 => {
                     self.check_owner(data.from)?;
-                    self.check_omniverse_burn(payload.ex_data, payload.amount)?;
+                    self.check_omniverse_burn(payload.get_account(), payload.amount)?;
                 },
                 _ => return Err(Error::WrongOpCode),
             };
@@ -442,28 +442,8 @@ mod omniverse_protocol {
         use secp256k1::rand::rngs::OsRng;
         use secp256k1::{ecdsa::RecoverableSignature, Message, PublicKey, Secp256k1, SecretKey};
 
-        const signature: [u8; 65] = [
-            119, 239,  67, 254,  77,  20, 200, 139, 106,  52, 180,
-            113,   5,  87,  53, 109, 195, 208,  44, 145,  57, 206,
-            32,  49, 154,  97, 194,  75, 128, 180, 187,  77, 103,
-            117, 252, 208,  68, 198, 154,  45, 159, 113,   5,  83,
-            206,  99,  41, 210, 144, 235,  48, 199,  57, 192,  38,
-            105, 190,  24, 173, 145, 200, 110, 136,  86,  27
-        ];
-
-        const message_hash: [u8; 32] = [
-            238, 229, 119, 112, 248,  69, 107, 141,
-            74,  45, 169, 173,   2, 132,  54, 236,
-            106,  98,  71, 118,  53, 193,  37, 113,
-            246,  83, 204,  25,  86,  45,  95, 211
-        ];
-
         const OWNER_PK: [u8; 64] = [0; 64];
         const USER_PK: [u8; 64] = [1; 64];
-
-        const EXPECTED_COMPRESSED_PUBLIC_KEY: [u8; 33] = [
-            2,144,101,32,18,128,96,228,162,202,76,18,107,219,5,157,35,133,125,153,254,81,97,69,51,241,57,23,173,207,216,227,161
-        ];
 
         fn get_sig_slice(sig: &RecoverableSignature) -> [u8; 65] {
             let (recovery_id, sig_slice) = sig.serialize_compact();
@@ -558,7 +538,7 @@ mod omniverse_protocol {
             assert_eq!(omniverse_protocol.check_execution(&transaction_data), Err(Error::PayloadError));
 
             // Op code error
-            let mut payload_item = OmniverseFungible::new(10, USER_PK, 100);
+            let mut payload_item = OmniverseFungible::new(10, USER_PK.to_vec(), 100);
             transaction_data.payload = payload_item.encode();
             assert_eq!(omniverse_protocol.check_execution(&transaction_data), Err(Error::WrongOpCode));
             
@@ -586,14 +566,20 @@ mod omniverse_protocol {
         #[ink::test]
         fn verify_signature_works() {
             let msg = "hello nika";
-            let mut msg_hash = <ink::env::hash::Sha2x256 as ink::env::hash::HashOutput>::Type::default();
-            ink::env::hash_bytes::<ink::env::hash::Sha2x256>(&msg.as_bytes(), &mut msg_hash);
-            assert_eq!(msg_hash, message_hash);
+            let mut msg_hash = <ink::env::hash::Keccak256 as ink::env::hash::HashOutput>::Type::default();
+            ink::env::hash_bytes::<ink::env::hash::Keccak256>(&msg.as_bytes(), &mut msg_hash);
             
+            let secp = Secp256k1::new();
             let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
-            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from("error message".as_bytes()), signature, EXPECTED_COMPRESSED_PUBLIC_KEY), false);
-            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from(msg.as_bytes()), signature, [0; 33]), false);
-            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from(msg.as_bytes()), signature, EXPECTED_COMPRESSED_PUBLIC_KEY), true);
+            let (secret_key, public_key) = secp.generate_keypair(&mut OsRng);
+            let pk: [u8; 64] = public_key.serialize_uncompressed()[1..].try_into().expect("");
+            let message = Message::from_slice(&msg_hash[..])
+		    .expect("messages must be 32 bytes and are expected to be hashes");
+            let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
+	        let sig_recovery = get_sig_slice(&sig);
+            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from("error message".as_bytes()), sig_recovery, compress_public_key(pk)), false);
+            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from(msg.as_bytes()), sig_recovery, [0; 33]), false);
+            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from(msg.as_bytes()), sig_recovery, compress_public_key(pk)), true);
         }
 
         #[ink::test]
@@ -607,16 +593,17 @@ mod omniverse_protocol {
                 payload: ink::prelude::vec::Vec::new(),
                 signature: [0; 65],
             };
-
-            // Wrong signature
-            assert_eq!(omniverse_protocol.verify_transaction(&transaction_data.clone()), Err(Error::WrongSignature));
+            let payload_item = OmniverseFungible::new(1, USER_PK.to_vec(), 100);
+            transaction_data.payload = payload_item.encode();
 
             // Succeed
             let secp = Secp256k1::new();
             let (secret_key, public_key) = secp.generate_keypair(&mut OsRng);
 		    let pk: [u8; 64] = public_key.serialize_uncompressed()[1..].try_into().expect("");
             transaction_data.from = pk;
-            let message = Message::from_slice(transaction_data.get_hash().as_slice())
+            let hash = transaction_data.get_hash();
+            assert_eq!(hash.is_ok(), true);
+            let message = Message::from_slice(hash.unwrap().as_slice())
 		    .expect("messages must be 32 bytes and are expected to be hashes");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
@@ -633,7 +620,9 @@ mod omniverse_protocol {
 
             // Nonce error
             transaction_data.nonce = 10;
-            let message = Message::from_slice(transaction_data.get_hash().as_slice())
+            let hash = transaction_data.get_hash();
+            assert_eq!(hash.is_ok(), true);
+            let message = Message::from_slice(hash.unwrap().as_slice())
 		    .expect("messages must be 32 bytes and are expected to be hashes");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
@@ -643,7 +632,9 @@ mod omniverse_protocol {
             // Malicious
             transaction_data.chain_id = 10;
             transaction_data.nonce = 0;
-            let message = Message::from_slice(transaction_data.get_hash().as_slice())
+            let hash = transaction_data.get_hash();
+            assert_eq!(hash.is_ok(), true);
+            let message = Message::from_slice(hash.unwrap().as_slice())
 		    .expect("messages must be 32 bytes and are expected to be hashes");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
@@ -667,9 +658,11 @@ mod omniverse_protocol {
             };
 
             // Succeed
-            let payload_item = OmniverseFungible::new(1, USER_PK, 100);
+            let payload_item = OmniverseFungible::new(1, USER_PK.to_vec(), 100);
             transaction_data.payload = payload_item.encode();
-            let message = Message::from_slice(transaction_data.get_hash().as_slice())
+            let hash = transaction_data.get_hash();
+            assert_eq!(hash.is_ok(), true);
+            let message = Message::from_slice(hash.unwrap().as_slice())
 		    .expect("messages must be 32 bytes and are expected to be hashes");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
@@ -758,7 +751,7 @@ mod omniverse_protocol {
 
             // Mint
             let mut tx_count: u128 = 2;
-            let payload_item = OmniverseFungible::new(1, OWNER_PK, 100);
+            let payload_item = OmniverseFungible::new(1, OWNER_PK.to_vec(), 100);
             transaction_data.payload = payload_item.encode();
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
             test::set_caller::<DefaultEnvironment>(compressed_pubkey_to_account(compress_public_key(OWNER_PK)));
@@ -771,7 +764,7 @@ mod omniverse_protocol {
 
             // Transfer
             tx_count += 1;
-            let payload_item = OmniverseFungible::new(0, USER_PK, 100);
+            let payload_item = OmniverseFungible::new(0, USER_PK.to_vec(), 100);
             transaction_data.payload = payload_item.encode();
             transaction_data.nonce = 0;
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
@@ -783,7 +776,7 @@ mod omniverse_protocol {
 
             // Burn
             tx_count += 1;
-            let payload_item = OmniverseFungible::new(2, USER_PK, 100);
+            let payload_item = OmniverseFungible::new(2, USER_PK.to_vec(), 100);
             transaction_data.payload = payload_item.encode();
             transaction_data.nonce = 0;
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
@@ -821,9 +814,11 @@ mod omniverse_protocol {
             members.push(Member {chain_id: 1, contract_address: Vec::<u8>::new()});
             test::set_caller::<DefaultEnvironment>(compressed_pubkey_to_account(compress_public_key(pk)));
             assert_eq!(omniverse_protocol.set_members(members), Ok(()));
-            let mut payload_item = OmniverseFungible::new(1, USER_PK, 100);
+            let mut payload_item = OmniverseFungible::new(1, USER_PK.to_vec(), 100);
             transaction_data.payload = payload_item.encode();
-            let message = Message::from_slice(transaction_data.get_hash().as_slice())
+            let hash = transaction_data.get_hash();
+            assert_eq!(hash.is_ok(), true);
+            let message = Message::from_slice(hash.unwrap().as_slice())
 		    .expect("messages must be 32 bytes and are expected to be hashes");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);

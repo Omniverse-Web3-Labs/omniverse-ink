@@ -16,21 +16,23 @@ pub struct OmniverseTransactionData {
 }
 
 impl OmniverseTransactionData {
-    pub fn get_raw_data(&self) -> Vec<u8> {
+    pub fn get_raw_data(&self) -> Result<Vec<u8>, Error> {
         let mut raw_buffer = ink::prelude::vec![];
         raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.nonce.to_be_bytes()));
         raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.chain_id.to_be_bytes()));
         raw_buffer.append(&mut self.initiate_sc.clone());
         raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.from.clone()));
-        raw_buffer.append(&mut self.payload.clone());
-        raw_buffer
+        let payload = OmniverseFungible::decode(&mut self.payload.as_slice().clone()).map_err(|_| Error::PayloadError)?;
+        let mut raw_payload: Vec<u8> = payload.get_raw_data();
+        raw_buffer.append(&mut raw_payload);
+        Ok(raw_buffer)
     }
 
-    pub fn get_hash(&self) -> <ink::env::hash::Sha2x256 as ink::env::hash::HashOutput>::Type {
-        let raw_data = self.get_raw_data();
-        let mut hash = <ink::env::hash::Sha2x256 as ink::env::hash::HashOutput>::Type::default();
-        ink::env::hash_bytes::<ink::env::hash::Sha2x256>(&raw_data, &mut hash);
-        hash
+    pub fn get_hash(&self) -> Result<<ink::env::hash::Keccak256 as ink::env::hash::HashOutput>::Type, Error> {
+        let raw_data = self.get_raw_data()?;
+        let mut hash = <ink::env::hash::Keccak256 as ink::env::hash::HashOutput>::Type::default();
+        ink::env::hash_bytes::<ink::env::hash::Keccak256>(&raw_data, &mut hash);
+        Ok(hash)
     }
 }
 
@@ -89,20 +91,34 @@ pub struct Member {
     pub contract_address: Vec<u8>,
 }
 
-#[derive(Encode, Decode)]
+#[derive(Debug, Encode, Decode)]
 pub struct OmniverseFungible {
     pub op: u8,
-    pub ex_data: [u8; 64],
+    pub ex_data: Vec<u8>,
     pub amount: u128,
 }
 
 impl OmniverseFungible {
-    pub fn new(op: u8, ex_data: [u8; 64], amount: u128) -> Self {
+    pub fn new(op: u8, ex_data: Vec<u8>, amount: u128) -> Self {
         Self {
             op,
             ex_data,
             amount,
         }
+    }
+
+    pub fn get_raw_data(&self) -> Vec<u8> {
+        let mut raw_buffer = ink::prelude::vec![];
+        raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.op.to_be_bytes()));
+        raw_buffer.append(&mut self.ex_data.clone());
+        raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.amount.to_be_bytes()));
+        raw_buffer
+    }
+
+    pub fn get_account(&self) -> [u8; 64] {
+        let mut ret = [0_u8; 64];
+        ret.copy_from_slice(&self.ex_data.as_slice());
+        ret
     }
 }
 
