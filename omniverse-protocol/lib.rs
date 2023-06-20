@@ -67,6 +67,12 @@ mod omniverse_protocol {
     }
 
     impl Omniverse for OmniverseProtocol {
+        /// Get the owner
+        #[ink(message)]
+        fn get_owner(&self) -> AccountId {
+            self.owner
+        }
+    
         /// Get the number of omniverse transactions sent by user `pk`
         #[ink(message)]
         fn get_transaction_count(&self, pk: [u8; 64]) -> u128 {

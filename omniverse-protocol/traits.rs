@@ -10,6 +10,9 @@ use ink::prelude::vec::Vec;
 
 #[ink::trait_definition]
 pub trait Omniverse {
+    /// Get the owner
+    #[ink(message)]
+    fn get_owner(&self) -> ink::primitives::AccountId;
     /// Get the number of omniverse transactions sent by user `pk`
     #[ink(message)]
     fn get_transaction_count(&self, pk: [u8; 64]) -> u128;
