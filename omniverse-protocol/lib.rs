@@ -379,8 +379,8 @@ mod omniverse_protocol {
             self.check_omniverse_transfer(from, amount)?;
 
             let from_balance = self.omniverse_balances.get(&from).unwrap().clone();
-            let to_balance = self.omniverse_balances.get(&to).unwrap_or(&0).clone();
             self.omniverse_balances.insert(from, from_balance - amount);
+            let to_balance = self.omniverse_balances.get(&to).unwrap_or(&0).clone();
             self.omniverse_balances.insert(to, to_balance + amount);
             Ok(())
         }
@@ -498,6 +498,10 @@ mod omniverse_protocol {
             assert_eq!(omniverse_protocol.omniverse_transfer(USER_PK, OWNER_PK, 1000), Ok(()));
             let balance = omniverse_protocol.omniverse_balances.get(&USER_PK).unwrap().clone();
             assert_eq!(balance, 0);
+            let balance = omniverse_protocol.omniverse_balances.get(&OWNER_PK).unwrap().clone();
+            assert_eq!(balance, 1000);
+            // Transfer to self
+            assert_eq!(omniverse_protocol.omniverse_transfer(OWNER_PK, OWNER_PK, 1000), Ok(()));
             let balance = omniverse_protocol.omniverse_balances.get(&OWNER_PK).unwrap().clone();
             assert_eq!(balance, 1000);
         }
