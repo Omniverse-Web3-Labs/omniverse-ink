@@ -466,6 +466,26 @@ mod omniverse_protocol {
         }
 
         //=================== Check non-message functions ======================
+        #[ink::test]
+        fn check_compressed_pubkey_to_account() {
+            const PUBLIC_KEY: [u8; 64] = [
+                176, 196, 174, 111,  40, 165,  87, 156, 190, 221, 191,
+                 64, 178,  32, 154,  82, 150, 186, 247, 164, 220, 129,
+                143, 144, 158, 128,  23,  41, 236, 181, 230,  99, 220,
+                226,  37, 152, 104,  94, 152,  90, 110, 209, 165,  87,
+                207,  33,  69, 222, 186,  82, 144,  65, 139,  60, 192,
+                  6, 128, 169,  10, 204, 201, 185,  53,  34
+              ];
+
+            const EXPECTED_OWNER_ACCOUNT_ID: [u8; 32] = [
+                121,  30,  83, 118,  68,  64,  37, 173,
+                121,  78, 244,  83, 145,  11, 189, 199,
+                199, 216, 165, 149, 120, 183, 176,  30,
+                 74, 175, 152,  34,  64, 115, 251,  71
+              ];
+
+            assert_eq!(compressed_pubkey_to_account(compress_public_key(PUBLIC_KEY)), AccountId::from(EXPECTED_OWNER_ACCOUNT_ID));
+        }
         // For fungible tokens
         #[ink::test]
         fn check_owner_works() {
