@@ -193,9 +193,11 @@ mod omniverse_protocol {
         #[ink(message)]
         fn get_executable_delayed_transaction(&self) -> Option<([u8; 64], u128)> {
             if !self.delayed_txs.is_empty() {
-                let cache = self.get_cached_transaction(self.delayed_txs[0].0).unwrap();
-                if self.env().block_timestamp() >= cache.timestamp + self.cd_time {
-                    return Some(self.delayed_txs[0]);
+                let cache = self.get_cached_transaction(self.delayed_txs[0].0);
+                if let Some(c) = cache {
+                    if self.env().block_timestamp() >= c.timestamp + self.cd_time {
+                        return Some(self.delayed_txs[0]);
+                    }
                 }
             }
             None
@@ -744,10 +746,12 @@ mod omniverse_protocol {
         fn trigger_execution_works() {
             let mut omniverse_protocol = OmniverseProtocol::new(0, OWNER_PK, "FT".to_string(), "FT".to_string());
             // No delayed tx
+            assert_eq!(omniverse_protocol.get_executable_delayed_transaction(), None);
             assert_eq!(omniverse_protocol.trigger_execution(), Err(Error::NoDelayedTx));
 
             // Not cached
             omniverse_protocol.delayed_txs.push((OWNER_PK, 0));
+            assert_eq!(omniverse_protocol.get_executable_delayed_transaction(), None);
             assert_eq!(omniverse_protocol.trigger_execution(), Err(Error::NotCached));
 
             // Nonce error
@@ -766,6 +770,7 @@ mod omniverse_protocol {
             transaction_data.nonce = 0;
             omniverse_protocol.transaction_cache.insert(transaction_data.from, OmniverseTx::new(transaction_data.clone(), 0));
             ink::env::test::set_block_timestamp::<DefaultEnvironment>(100);
+            assert_eq!(omniverse_protocol.get_executable_delayed_transaction().is_some(), true);
             assert_eq!(omniverse_protocol.trigger_execution(), Err(Error::PayloadError));
 
             // Mint
