@@ -21,8 +21,8 @@ impl OmniverseTransactionData {
         raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.nonce.to_be_bytes()));
         raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.chain_id.to_be_bytes()));
         raw_buffer.append(&mut self.initiate_sc.clone());
-        raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.from.clone()));
-        let payload = OmniverseFungible::decode(&mut self.payload.as_slice().clone()).map_err(|_| Error::PayloadError)?;
+        raw_buffer.append(&mut ink::prelude::vec::Vec::from(self.from));
+        let payload = OmniverseFungible::decode(&mut self.payload.as_slice()).map_err(|_| Error::PayloadError)?;
         let mut raw_payload: Vec<u8> = payload.get_raw_data();
         raw_buffer.append(&mut raw_payload);
         Ok(raw_buffer)
@@ -68,20 +68,11 @@ impl EvilTxData {
     }
 }
 
-#[derive(Debug, Decode, Encode, Clone)]
+#[derive(Default, Debug, Decode, Encode, Clone)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
 pub struct RecordedCertificate {
     pub tx_list: Vec<OmniverseTx>,
     pub evil_tx_list: Vec<EvilTxData>,
-}
-
-impl RecordedCertificate {
-    pub fn default() -> Self {
-        Self {
-            tx_list: Vec::<OmniverseTx>::new(),
-            evil_tx_list: Vec::<EvilTxData>::new(),
-        }
-    }
 }
 
 #[derive(Debug, Decode, Encode, Clone)]
@@ -117,7 +108,7 @@ impl OmniverseFungible {
 
     pub fn get_account(&self) -> [u8; 64] {
         let mut ret = [0_u8; 64];
-        ret.copy_from_slice(&self.ex_data.as_slice());
+        ret.copy_from_slice(self.ex_data.as_slice());
         ret
     }
 }

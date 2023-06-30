@@ -1,4 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
+#![allow(clippy::enum_variant_names)]
+#![allow(clippy::comparison_chain)]
 
 pub mod traits;
 pub mod types;
@@ -89,11 +91,8 @@ mod omniverse_protocol {
             let ret = self.transaction_recorder.get(&pk);
             match ret {
                 None => None,
-                Some(&ref record) => {
-                    match record.tx_list.get(nonce as usize) {
-                        None => None,
-                        Some(&ref data) => Some(data.clone()),
-                    }
+                Some(record) => {
+                    record.tx_list.get(nonce as usize).cloned()
                 },
             }
         }
@@ -108,10 +107,7 @@ mod omniverse_protocol {
         #[ink(message)]
         fn get_cached_transaction(&self, pk: [u8; 64]) -> Option<OmniverseTx> {
             let cache = self.transaction_cache.get(&pk);
-            match cache {
-                Some(c) => Some(c.clone()),
-                None => None
-            }
+            cache.cloned()
         }
 
         /// Set cooling down time
@@ -142,7 +138,7 @@ mod omniverse_protocol {
         /// Trigger execution
         #[ink(message)]
         fn trigger_execution(&mut self) -> Result<(), Error> {            
-            if self.delayed_txs.len() == 0 {
+            if self.delayed_txs.is_empty() {
                 return Err(Error::NoDelayedTx);
             }
 
@@ -196,10 +192,10 @@ mod omniverse_protocol {
         /// Get executable transaction
         #[ink(message)]
         fn get_executable_delayed_transaction(&self) -> Option<([u8; 64], u128)> {
-            if self.delayed_txs.len() > 0 {
+            if !self.delayed_txs.is_empty() {
                 let cache = self.get_cached_transaction(self.delayed_txs[0].0).unwrap();
                 if self.env().block_timestamp() >= cache.timestamp + self.cd_time {
-                    return Some(self.delayed_txs[0].clone());
+                    return Some(self.delayed_txs[0]);
                 }
             }
             None
@@ -208,7 +204,7 @@ mod omniverse_protocol {
         /// Get omniverse balance
         #[ink(message)]
         fn balance_of(&self, pk: [u8; 64]) -> u128 {
-            self.omniverse_balances.get(&pk).unwrap_or(&0).clone()
+            *self.omniverse_balances.get(&pk).unwrap_or(&0)
         }
     }
 
@@ -238,7 +234,7 @@ mod omniverse_protocol {
             // Check if the sender is malicious
             let rc_ret = self.transaction_recorder.get(&data.from);
             if let Some(rc) = rc_ret {
-                if rc.evil_tx_list.len() > 0 {
+                if !rc.evil_tx_list.is_empty() {
                     return Err(Error::UserMalicious);
                 }
             }
@@ -257,7 +253,7 @@ mod omniverse_protocol {
                     let cache = OmniverseTx::new(data.clone(), self.env().block_timestamp());
                     // Logic verification
                     self.check_execution(&data)?;
-                    self.transaction_cache.insert(data.from.clone(), cache);
+                    self.transaction_cache.insert(data.from, cache);
                     Self::env().emit_event(TransactionSent {
                         pk: data.from,
                         nonce: data.nonce,
@@ -292,7 +288,7 @@ mod omniverse_protocol {
             let mut rc = self.transaction_recorder.get(&pk).unwrap_or(&RecordedCertificate::default()).clone();
             rc.tx_list.push(cache.clone());
             self.transaction_cache.remove(&pk);
-            self.transaction_recorder.insert(pk.clone(), rc);                
+            self.transaction_recorder.insert(pk, rc);                
             Self::env().emit_event(TransactionExecuted {
                 pk,
                 nonce,
@@ -303,13 +299,7 @@ mod omniverse_protocol {
         fn verify_transaction(&mut self, data: &OmniverseTransactionData) -> Result<(), Error> {
             let raw_data = data.get_raw_data()?;
             let c_pk = compress_public_key(data.from);
-            // Verify signature
-            let sig = data
-            .signature
-            .clone()
-            .try_into()
-            .map_err(|_| Error::SerializePublicKeyFailed)?;
-            if !self.verify_signature(&raw_data, sig, c_pk) {
+            if !self.verify_signature(&raw_data, &data.signature, c_pk) {
                 return Err(Error::WrongSignature);
             }
 
@@ -317,7 +307,7 @@ mod omniverse_protocol {
             let mut rc = self.transaction_recorder.get(&data.from).unwrap_or(& RecordedCertificate::default()).clone();
             let nonce = rc.tx_list.len() as u128;
             if nonce == data.nonce {
-                return Ok(());
+                Ok(())
             }
             else if nonce > data.nonce {
                 // The message has been received, check conflicts
@@ -327,24 +317,24 @@ mod omniverse_protocol {
                 if his_hash != hash {
                     rc.evil_tx_list.push(EvilTxData::new(OmniverseTx::new(data.clone(), self.env().block_timestamp()), nonce));
                     self.transaction_recorder.insert(data.from, rc.clone());
-                    return Err(Error::Malicious);
+                    Err(Error::Malicious)
                 }
                 else {
-                    return Err(Error::Duplicated);
+                    Err(Error::Duplicated)
                 }
             }
             else {
-                return Err(Error::NonceError);
+                Err(Error::NonceError)
             }
         }
 
         /// Verify signature
-        fn verify_signature(&self, raw_data: &Vec<u8>, signature: [u8; 65], c_pk: [u8; 33]) -> bool {
+        fn verify_signature(&self, raw_data: &[u8], signature: &[u8; 65], c_pk: [u8; 33]) -> bool {
             let mut hash = <ink::env::hash::Keccak256 as ink::env::hash::HashOutput>::Type::default();
-            ink::env::hash_bytes::<ink::env::hash::Keccak256>(&raw_data, &mut hash);
+            ink::env::hash_bytes::<ink::env::hash::Keccak256>(raw_data, &mut hash);
 
             let mut compressed_pubkey = [0; 33];
-            let ret = ink::env::ecdsa_recover(&signature, &hash, &mut compressed_pubkey);
+            let ret = ink::env::ecdsa_recover(signature, &hash, &mut compressed_pubkey);
             if ret.is_err() {
                 return false;
             }
@@ -374,7 +364,7 @@ mod omniverse_protocol {
         }
 
         fn check_omniverse_transfer(&self, from: [u8; 64], amount: u128) -> Result<(), Error> {
-            let balance = self.omniverse_balances.get(&from).unwrap_or(&0).clone();
+            let balance = *self.omniverse_balances.get(&from).unwrap_or(&0);
             match balance < amount {
                 true => Err(Error::ExceedBalance),
                 false => Ok(()),
@@ -384,9 +374,9 @@ mod omniverse_protocol {
         fn omniverse_transfer(&mut self, from: [u8; 64], to: [u8; 64], amount: u128) -> Result<(), Error> {
             self.check_omniverse_transfer(from, amount)?;
 
-            let from_balance = self.omniverse_balances.get(&from).unwrap().clone();
+            let from_balance = *self.omniverse_balances.get(&from).unwrap();
             self.omniverse_balances.insert(from, from_balance - amount);
-            let to_balance = self.omniverse_balances.get(&to).unwrap_or(&0).clone();
+            let to_balance = *self.omniverse_balances.get(&to).unwrap_or(&0);
             self.omniverse_balances.insert(to, to_balance + amount);
             Ok(())
         }
@@ -398,7 +388,7 @@ mod omniverse_protocol {
         }
 
         fn check_omniverse_burn(&self, from: [u8; 64], amount: u128) -> Result<(), Error> {
-            let balance = self.omniverse_balances.get(&from).unwrap_or(&0).clone();
+            let balance = *self.omniverse_balances.get(&from).unwrap_or(&0);
             match balance < amount {
                 true => Err(Error::ExceedBalance),
                 false => Ok(()),
@@ -606,9 +596,9 @@ mod omniverse_protocol {
 		    .expect("messages must be 32 bytes and are expected to be hashes");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&message, &secret_key);
 	        let sig_recovery = get_sig_slice(&sig);
-            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from("error message".as_bytes()), sig_recovery, compress_public_key(pk)), false);
-            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from(msg.as_bytes()), sig_recovery, [0; 33]), false);
-            assert_eq!(omniverse_protocol.verify_signature(&ink::prelude::vec::Vec::from(msg.as_bytes()), sig_recovery, compress_public_key(pk)), true);
+            assert_eq!(omniverse_protocol.verify_signature("error message".as_bytes(), &sig_recovery, compress_public_key(pk)), false);
+            assert_eq!(omniverse_protocol.verify_signature(msg.as_bytes(), &sig_recovery, [0; 33]), false);
+            assert_eq!(omniverse_protocol.verify_signature(msg.as_bytes(), &sig_recovery, compress_public_key(pk)), true);
         }
 
         #[ink::test]
